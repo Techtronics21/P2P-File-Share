@@ -380,5 +380,5 @@ File Transfer
 
 **Arnav Thakur**
 - GitHub: [@Techtronics](https://github.com/Techtronics21)
-- LinkedIn: [Arnav Thakur](www.linkedin.com/in/arnav-thakur-788700189)
+- LinkedIn: [Arnav Thakur](https://www.linkedin.com/in/arnav-thakur-788700189/)
 
