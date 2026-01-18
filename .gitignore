@@ -1,0 +1,22 @@
+# Maven Build Output
+target/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# Node.js / Next.js
+ui/node_modules/
+ui/.next/
+ui/out/
+
+# OS Files
+.DS_Store
+
+# Runtime Files
+peerlink-uploads/
+*.log
+
+# Internal Documentation
+SECURITY_IMPROVEMENTS.md
+CODEBASE_EXPLANATION.md
