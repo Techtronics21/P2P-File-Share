@@ -1,6 +1,6 @@
-# 🔗 PeerLink - Secure P2P File Sharing
+# 🔗 P2P File Sharer - Secure P2P File Sharing
 
-A modern, secure peer-to-peer file sharing application built with Java (backend) and Next.js (frontend). Share files directly between users with PIN-based authentication and enterprise-grade security features.
+P2P File Sharer is a secure peer-to-peer file sharing application which I built with Java (backend) and Next.js (frontend). One can use it to share files directly between users with PIN-based authentication and enterprise-grade security features.
 
 ![Java](https://img.shields.io/badge/Java-17-orange?style=flat)
 ![NextJS](https://img.shields.io/badge/Next.js-14-black?style=flat)
@@ -225,7 +225,7 @@ if (port == null) {
 
 ```
 PeerLink/
-├── src/main/java/org/abhineshjha/
+├── src/main/java/org/arnavthakur/
 │   ├── App.java                    # Application entry point
 │   ├── controller/
 │   │   └── FileController.java     # HTTP server & routing
@@ -376,13 +376,9 @@ File Transfer
 ---
 
 
-## 👨‍💻 Author
+## Author
 
-**Abhinesh Jha**
-- GitHub: [@Abhineshhh](https://github.com/Abhineshhh)
-- LinkedIn: [Abhinesh Jha](https://linkedin.com/in/abhineshjha)
+**Arnav Thakur**
+- GitHub: [@Techtronics](https://github.com/Techtronics21)
+- LinkedIn: [Arnav Thakur](www.linkedin.com/in/arnav-thakur-788700189)
 
----
-
-
-**⭐ If you find this project useful, please consider giving it a star!**
