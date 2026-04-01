@@ -11,16 +11,16 @@ interface FileDownloadProps {
 export default function FileDownload({ onDownload, isDownloading }: FileDownloadProps) {
   const [accessToken, setAccessToken] = useState('');
   const [error, setError] = useState('');
-  
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
+
     if (!accessToken.trim()) {
       setError('Please enter the access PIN');
       return;
     }
-    
+
     try {
       // Use a dummy port, since only PIN is used now
       await onDownload(0, accessToken.trim());
@@ -28,7 +28,7 @@ export default function FileDownload({ onDownload, isDownloading }: FileDownload
       setError('Failed to download the file. Please check the PIN and try again.');
     }
   };
-  
+
   return (
     <div className="space-y-4">
       <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
@@ -48,14 +48,14 @@ export default function FileDownload({ onDownload, isDownloading }: FileDownload
             id="accessToken"
             value={accessToken}
             onChange={(e) => setAccessToken(e.target.value)}
-            placeholder="Enter the 6-digit access PIN"
+            placeholder="Enter the 12-digit access PIN"
             className="input-field font-mono tracking-wider"
             disabled={isDownloading}
-            maxLength={6}
+            maxLength={12}
             required
           />
         </div>
-        
+
         {error && <p className="text-sm text-red-600">{error}</p>}
         
         <button

@@ -16,18 +16,23 @@ public class App
             System.out.println("PeerLink server started on port 8080");
             System.out.println("UI available at http://localhost:3000");
 
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> { // new thread is created to run the shutdown hook by
                 System.out.println("Shutting down server...");
                 fileController.stop();
             }));
 
-            System.out.println("Press Enter to stop the server");
-            System.in.read();
-            fileController.stop();
+            // Keep the server running (don't wait for input)
+            System.out.println("Server is running. Press Ctrl+C to stop.");
+
+            // Block indefinitely to keep server alive
+            Thread.currentThread().join();
 
         } catch (IOException e) {
             System.err.println("Error starting server: " + e.getMessage());
+            e.printStackTrace();
             System.exit(1);
+        } catch (InterruptedException e) {
+            System.out.println("Server interrupted.");
         }
     }
 }

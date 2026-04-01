@@ -1,6 +1,6 @@
-# 🔗 P2P File Sharer - Secure P2P File Sharing
+# 🔗 PeerLink — Secure Hybrid File Sharing
 
-P2P File Sharer is a secure peer-to-peer file sharing application which I built with Java (backend) and Next.js (frontend). One can use it to share files directly between users with PIN-based authentication and enterprise-grade security features.
+PeerLink is a secure file sharing system with a **hybrid architecture** supporting three transfer modes: **S3 Relay** for asynchronous cloud-based sharing, **WebSocket Relay** for real-time P2P streaming (zero server storage), and **Socket P2P** for direct TCP transfers. Built with Java (backend) and Next.js (frontend).
 
 ![Java](https://img.shields.io/badge/Java-17-orange?style=flat)
 ![NextJS](https://img.shields.io/badge/Next.js-14-black?style=flat)
@@ -9,215 +9,167 @@ P2P File Sharer is a secure peer-to-peer file sharing application which I built 
 
 ---
 
-## 📋 Table of Contents
-
-- [Features](#-features)
-- [Architecture & Concepts](#-architecture--concepts)
-- [Technology Stack](#-technology-stack)
-- [Security Features](#-security-features)
-- [Getting Started](#-getting-started)
-- [How It Works](#-how-it-works)
-- [Project Structure](#-project-structure)
-- [API Documentation](#-api-documentation)
-- [Contributing](#-contributing)
-- [License](#-license)
-
----
-
 ## ✨ Features
 
-- **🔐 PIN-Based Authentication**: Each upload generates a unique 6-digit PIN for secure access
-- **⚡ Real-Time P2P Transfer**: Direct file transfer between peers without centralized storage
-- **📁 Multiple File Types**: Support for documents, images, PDFs, and archives
-- **🛡️ Enterprise Security**: Rate limiting, file validation, and timeout protection
-- **🎨 Modern UI**: Clean, responsive interface built with React and Tailwind CSS
-- **🚀 Fast & Lightweight**: Minimal dependencies, optimized for performance
-- **📊 File Size Control**: 100MB upload limit with streaming validation
-- **🔒 Thread-Safe**: Concurrent request handling with proper synchronization
+- **⚡ WebSocket P2P Relay**: Real-time file streaming — file passes through server memory, never touches disk
+- **☁️ S3 Cloud Relay**: Upload once, download anytime — supports asynchronous sharing
+- **🔐 PIN-Based Access**: 12-character cryptographically secure tokens (72-bit entropy)
+- **📡 Dual-Port Architecture**: HTTP API (`:8080`) + WebSocket relay (`:8081`)
+- **🛡️ Defense-in-Depth Security**: Rate limiting, file validation, filename sanitization, path traversal prevention
+- **📁 Streaming Architecture**: Constant memory usage regardless of file size (8KB–64KB buffers)
+- **🔒 Thread-Safe**: `ConcurrentHashMap`, `LinkedBlockingQueue`, atomic operations
+- **🎨 Modern UI**: Mode selection toggle, real-time transfer progress, responsive design
 
 ---
 
-## 🏗️ Architecture & Concepts
+## 🏗️ Architecture
 
-### **1. Peer-to-Peer (P2P) Architecture**
+### Three Transfer Modes
 
-PeerLink implements a hybrid P2P model:
-- **Central Coordinator**: Backend server manages file metadata and authentication
-- **Direct Transfer**: Actual file data flows directly between peers via TCP sockets
-- **Dynamic Ports**: Each file sharing session uses a unique, randomly assigned port
+| Mode | User Selects | How It Works | File Stored On |
+|------|-------------|-------------|----------------|
+| **WebSocket Relay** | ⚡ Share Now | File streams from sender → server (memory) → receiver in real-time | **Nowhere** (zero disk) |
+| **S3 Relay** | ☁️ Upload & Share Later | File uploaded to AWS S3, downloaded later via pre-signed URL | AWS S3 |
+| **Socket P2P** | CLI: `X-Transfer-Mode: socket` | File saved to temp dir, served via ephemeral TCP port | Local disk |
+
+### System Diagram
 
 ```
-┌─────────┐         ┌──────────────┐         ┌───────────┐
-│ Uploader│◄───────►│   Backend    │◄───────►│Downloader │
-│         │ Metadata│  (Java API)  │ Metadata│           │
-└────┬────┘         └──────────────┘         └─────┬─────┘
-     │                                             │
-     │          Direct P2P Transfer                │
-     └─────────────────────────────────────────────┘
-                  (TCP Socket)
+┌──────────────────────────────────────────────────────────────┐
+│                     FRONTEND (Port 3000)                      │
+│  Next.js + React + TypeScript                                 │
+│                                                               │
+│  ⚡ Share Now          ☁️ Upload & Share Later                │
+│  POST /register        POST /upload (multipart)               │
+│  + WebSocket conn      + axios progress tracking              │
+└──────────────┬─────────────────┬──────────────────────────────┘
+               │                 │
+               ▼                 ▼
+┌──────────────────────────────────────────────────────────────┐
+│              BACKEND (HTTP :8080 + WS :8081)                  │
+│  Java 17 + com.sun.net.httpserver + org.java_websocket        │
+│                                                               │
+│  RegisterHandler    UploadHandler    DownloadHandler           │
+│  POST /register     POST /upload     GET /download            │
+│  (metadata only)    (multipart/S3)   (routes by mode)         │
+│       │                  │                 │                   │
+│       ▼                  ▼                 ▼                   │
+│  ┌─────────────── FileSharer (Service) ──────────────────┐    │
+│  │  Token generation (SecureRandom)                       │    │
+│  │  Mode routing: S3_RELAY / WEBSOCKET_RELAY / SOCKET_P2P │    │
+│  │  Cleanup after download (mode-aware)                   │    │
+│  └────────┬──────────────┬──────────────┬────────────────┘    │
+│           │              │              │                      │
+│     S3Service      RelayServer     ServerSocket                │
+│     (AWS SDK)      (WS :8081)      (ephemeral)                │
+│                    BlockingQueue                               │
+│                    relay bridge                                │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-### **2. Multi-Layered Security**
+### WebSocket Relay Flow
 
-**Defense in Depth Approach:**
-1. **Network Layer**: Port validation (1024-65535), socket timeouts
-2. **Application Layer**: Rate limiting, content-type validation
-3. **Authentication Layer**: PIN-based access control
-4. **Data Layer**: File size limits, sanitization
-
-### **3. Concurrent Request Handling**
-
-- **ConcurrentHashMap**: Thread-safe storage for file metadata and tokens
-- **ExecutorService**: Thread pool for handling multiple simultaneous requests
-- **Atomic Operations**: Race-condition-free counter updates for rate limiting
-
-### **4. Streaming Architecture**
-
-Files are processed using **streaming** rather than loading entirely into memory:
-- 8KB buffer for efficient data transfer
-- Real-time size validation during upload
-- Memory footprint independent of file size
-
-### **5. RESTful API Design**
-
-Clean, stateless API endpoints following REST principles:
-- `POST /api/upload` - Upload file and receive PIN
-- `GET /api/download?token={PIN}` - Download file with PIN authentication
+```
+Sender                        Server                       Receiver
+  │                              │                              │
+  ├─ POST /register ────────────►│ Creates token+RelaySession   │
+  │◄─ {token:"aBcDeFgHiJkL"} ──┤                              │
+  │                              │                              │
+  ├─ WebSocket connect ─────────►│ Registers WS ↔ session      │
+  │  ws://server:8081/relay      │                              │
+  │  ?token=aBcDeFgHiJkL         │                              │
+  │                              │                              │
+  │  [Sender shares PIN]         │                              │
+  │                              │◄── GET /download?token=... ──┤
+  │                              │                              │
+  │◄─ {type:"SEND_FILE"} ──────┤                              │
+  │                              │                              │
+  ├─ Binary WS frames ─────────►│── BlockingQueue ────────────►│
+  │  (64KB chunks)               │   poll() → HTTP response     │
+  │                              │                              │
+  ├─ {TRANSFER_COMPLETE} ──────►│── END_SENTINEL ─────────────►│
+  │                              │   Cleanup                    │ ✅ Done
+```
 
 ---
 
 ## 🛠️ Technology Stack
 
-### **Backend**
-- **Java 17**: Modern Java features including records, text blocks, var
-- **HTTP Server**: Built-in `com.sun.net.httpserver` for lightweight HTTP handling
-- **Maven**: Dependency management and build automation
-- **Apache Commons IO**: Stream utilities for efficient file handling
+### Backend
+- **Java 17** — `com.sun.net.httpserver` for HTTP, no framework (hand-rolled routing, CORS, multipart parsing)
+- **org.java-websocket** — WebSocket server for real-time relay
+- **AWS SDK v2** — S3 file storage with server-side encryption (AES-256)
+- **Maven** — Build automation with shade plugin for fat JAR
 
-### **Frontend**
-- **Next.js 14**: React framework with server-side rendering
-- **TypeScript**: Type-safe JavaScript for better developer experience
-- **Tailwind CSS**: Utility-first CSS framework for rapid UI development
-- **Axios**: HTTP client for API communication
-- **React Icons**: Modern icon library
+### Frontend
+- **Next.js 14** + **TypeScript** — React framework
+- **Axios** — HTTP client with upload progress tracking
+- **WebSocket API** — Browser-native WS for real-time file streaming
+- **Framer Motion** — Animations
+- **Lucide/React Icons** — UI icons
 
 ---
 
-## 🔒 Security Features
+## 🔒 Security
 
-### **1. Rate Limiting**
-- **10 uploads per IP per minute**
-- Sliding window algorithm with automatic reset
-- HTTP 429 (Too Many Requests) response for violations
-
-### **2. File Validation**
-**Allowed Extensions**: `.txt`, `.pdf`, `.jpg`, `.jpeg`, `.png`, `.gif`, `.zip`, `.doc`, `.docx`, `.csv`
-
-**Blocked**: Executables (`.exe`, `.sh`, `.bat`), scripts (`.js`, `.php`, `.py`)
-
-### **3. Size Limits**
-- Maximum file size: **100MB**
-- Three-layer validation:
-  1. Content-Length header check
-  2. Streaming size validation
-  3. Post-parse content verification
-
-### **4. Access Control**
-- **6-digit PIN** (100,000 - 999,999 combinations)
-- Token required for every download attempt
-- HTTP 403 (Forbidden) for invalid tokens
-
-### **5. Resource Protection**
-- **30-second socket timeout** prevents hanging connections
-- Automatic cleanup of temporary files (even on errors)
-- Port range restriction (1024-65535) blocks system ports
-
-### **6. Thread Safety**
-- `ConcurrentHashMap` for shared state
-- `AtomicInteger` for lock-free counters
-- No race conditions in concurrent operations
+| Layer | Protection | Implementation |
+|-------|-----------|----------------|
+| **Rate Limiting** | 10 req/min per IP | `FixedWindowRateLimiter` with `ConcurrentHashMap.compute()` |
+| **Token Security** | 72-bit entropy, unguessable | `SecureRandom`, 12-char from 64-char alphabet |
+| **File Validation** | Whitelist extensions + MIME check | `.txt .pdf .jpg .png .gif .zip .doc .docx .csv` |
+| **Size Limits** | 500MB max, streaming enforcement | Checked at header level + during streaming |
+| **Path Traversal** | `Path.normalize()` + base dir check | `normalizeAndValidatePath()` in FileSharer |
+| **Filename Sanitization** | Strips `../`, `"`, `;`, CR/LF | `HeaderUtils.sanitizeFilename()` |
+| **CORS** | Cross-origin browser requests | Manual headers on every handler |
+| **WS Auth** | Token validated on connect | `RelayServer.onOpen()` validates token |
 
 ---
 
 ## 🚀 Getting Started
 
-### **Prerequisites**
-- Java 17 or higher
+### Prerequisites
+- Java 17+
 - Node.js 18+ and npm
 - Maven 3.9+
+- AWS credentials (optional — WebSocket relay works without S3)
 
-### **Installation**
+### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/peerlink.git
-   cd peerlink
-   ```
-
-2. **Build the backend**
-   ```bash
-   mvn clean package
-   ```
-
-3. **Install frontend dependencies**
-   ```bash
-   cd ui
-   npm install
-   ```
-
-### **Running Locally**
-
-Terminal 1 (Backend):
 ```bash
-java -cp target/p2p-1.0-SNAPSHOT.jar org.arnavthakur.App
+# Clone
+git clone https://github.com/Techtronics21/P2P-File-Share.git
+cd P2P-File-Share
+
+# Build backend
+mvn clean package -DskipTests
+
+# Install frontend
+cd ui && npm install && cd ..
 ```
 
-Terminal 2 (Frontend):
+### Running
+
+**Terminal 1 — Backend:**
 ```bash
-cd ui
-npm run dev
+java -jar target/p2p-1.0-SNAPSHOT-shaded.jar
+# 🚀 API server started on port 8080
+# 🔌 WebSocket relay on port 8081
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
----
-
-## 💡 How It Works
-
-### **Upload Flow**
-
-1. User selects a file in the UI
-2. Frontend sends multipart form data to `/api/upload`
-3. Backend validates file type, size, and rate limit
-4. File is saved temporarily with UUID-based filename
-5. Backend generates:
-   - Random port (1024-65535)
-   - 6-digit access PIN
-6. Background thread starts TCP server on the assigned port
-7. Frontend displays PIN to user
-
-### **Download Flow**
-
-1. User enters 6-digit PIN
-2. Frontend sends request to `/api/download?token={PIN}`
-3. Backend validates PIN and looks up associated port
-4. Backend connects to uploader's TCP server on that port
-5. File is streamed through backend to downloader
-6. Temporary files are cleaned up automatically
-
-### **Token-Based Authentication**
-
-```java
-// Upload: Generate PIN
-String token = generateAccessToken(); // "654321"
-accessTokens.put(port, token);
-
-// Download: Validate PIN
-Integer port = getPortByToken(token);
-if (port == null) {
-    return 403; // Forbidden
-}
+**Terminal 2 — Frontend:**
+```bash
+cd ui && npm run dev
+# ▲ Next.js on http://localhost:3000
 ```
+
+### LAN Access (from other devices)
+
+Update `ui/.env.local`:
+```
+NEXT_PUBLIC_API_URL=http://YOUR_IP:8080
+NEXT_PUBLIC_WS_URL=ws://YOUR_IP:8081
+```
+Then restart the frontend. Others can access at `http://YOUR_IP:3000`.
 
 ---
 
@@ -226,159 +178,88 @@ if (port == null) {
 ```
 PeerLink/
 ├── src/main/java/org/arnavthakur/
-│   ├── App.java                    # Application entry point
+│   ├── App.java                        # Entry point
 │   ├── controller/
-│   │   └── FileController.java     # HTTP server & routing
+│   │   └── FileController.java         # HTTP + WS server startup, route registration
 │   ├── handler/
-│   │   ├── CORSHandler.java        # CORS & 404 handling
-│   │   ├── UploadHandler.java      # File upload logic
-│   │   └── DownloadHandler.java    # File download logic
+│   │   ├── UploadHandler.java          # POST /upload (multipart, S3 mode)
+│   │   ├── DownloadHandler.java        # GET /download (routes by transfer mode)
+│   │   ├── RegisterHandler.java        # POST /register (WebSocket relay metadata)
+│   │   ├── RelayServer.java            # WebSocket server (port 8081, binary relay)
+│   │   ├── HealthHandler.java          # GET /health (monitoring)
+│   │   └── CORSHandler.java            # CORS + 404 fallback
 │   ├── service/
-│   │   └── FileSharer.java         # P2P server & token management
+│   │   ├── FileSharer.java             # Core service: tokens, modes, cleanup
+│   │   ├── RelaySession.java           # WS relay session (BlockingQueue bridge)
+│   │   └── S3Service.java              # AWS S3 operations (upload, download, delete)
 │   └── utils/
-│       ├── MultiParser.java        # Multipart form parser
-│       └── UploadUtils.java        # Port generation utility
+│       ├── StreamingMultipartParser.java # Streaming multipart parser (constant memory)
+│       ├── FixedWindowRateLimiter.java  # Per-IP rate limiter (ConcurrentHashMap)
+│       ├── HeaderUtils.java            # Filename sanitization, Content-Disposition
+│       └── UploadUtils.java            # Ephemeral port generation
 ├── ui/
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx            # Main page component
-│   │   │   └── globals.css         # Global styles
+│   │   │   └── page.tsx                # Main page (mode toggle, WS logic, S3 upload)
 │   │   └── components/
-│   │       ├── FileUpload.tsx      # Upload UI component
-│   │       ├── FileDownload.tsx    # Download UI component
-│   │       └── InviteCode.tsx      # PIN display component
-│   └── package.json
-├── pom.xml                          # Maven configuration
+│   │       ├── FileUpload.tsx           # Drag-and-drop file selector
+│   │       ├── FileDownload.tsx         # PIN input + download trigger
+│   │       └── InviteCode.tsx           # PIN display + copy
+│   └── .env.local                       # API + WS URLs
+├── pom.xml                              # Maven config (shade plugin, dependencies)
 └── README.md
 ```
 
 ---
 
-## 📡 API Documentation
+## 📡 API Reference
 
-### **POST /api/upload**
-
-Upload a file and receive access credentials.
-
-**Request:**
-```http
-POST /api/upload HTTP/1.1
-Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
-
-------WebKitFormBoundary
-Content-Disposition: form-data; name="file"; filename="document.pdf"
-Content-Type: application/pdf
-
-[binary data]
-------WebKitFormBoundary--
-```
-
-**Response:**
+### `POST /register` — Register a WebSocket relay share
 ```json
-{
-  "port": 54321,
-  "token": "654321"
-}
+// Request
+{ "filename": "photo.jpg", "size": 5242880, "contentType": "image/jpeg" }
+
+// Response
+{ "token": "aBcDeFgHiJkL" }
 ```
 
-**Status Codes:**
-- `200 OK` - Upload successful
-- `400 Bad Request` - Invalid file type or missing data
-- `413 Payload Too Large` - File exceeds 100MB
-- `415 Unsupported Media Type` - File type not allowed
-- `429 Too Many Requests` - Rate limit exceeded
+### `POST /upload` — Upload file to S3
+```
+Content-Type: multipart/form-data
+Body: file=@photo.jpg
+
+Response: { "token": "aBcDeFgHiJkL" }
+```
+
+### `GET /download?token={PIN}` — Download file
+Routes automatically based on transfer mode:
+- **WEBSOCKET_RELAY** → Signals uploader's WS, relays binary frames to response
+- **S3_RELAY** → Streams from S3 with Content-Disposition header
+- **SOCKET_P2P** → Streams from local disk
+
+### `ws://server:8081/relay?token={PIN}` — WebSocket relay
+Protocol:
+- Server → Client: `{"type":"REGISTERED"}`, `{"type":"SEND_FILE"}`
+- Client → Server: Binary frames (64KB file chunks)
+- Client → Server: `{"type":"TRANSFER_COMPLETE"}`
 
 ---
 
-### **GET /api/download?token={PIN}**
+## 🧠 Key Design Decisions
 
-Download a file using the access PIN.
-
-**Request:**
-```http
-GET /api/download?token=654321 HTTP/1.1
-```
-
-**Response:**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/octet-stream
-Content-Disposition: attachment; filename="document.pdf"
-
-[binary data]
-```
-
-**Status Codes:**
-- `200 OK` - Download successful
-- `403 Forbidden` - Invalid or missing token
-- `404 Not Found` - File not found
-- `500 Internal Server Error` - Download error
+| Decision | Why | Alternative |
+|----------|-----|-------------|
+| `com.sun.net.httpserver` over Spring Boot | Learn what frameworks abstract away | Spring Boot, Netty, Micronaut |
+| WebSocket relay over raw TCP sockets | Browsers can't open TCP; WS passes through firewalls | WebRTC DataChannels (true P2P) |
+| `LinkedBlockingQueue` for relay bridge | Thread-safe producer-consumer with backpressure | `SynchronousQueue`, NIO Pipe |
+| `SecureRandom` over `Random` | Tokens must be unguessable (72-bit entropy) | UUID, HMAC tokens |
+| Separate WS port (8081) | `HttpServer` doesn't support WS upgrade | Implement WS handshake manually |
+| Custom multipart parser | Streaming (constant memory) vs library (loads all) | Apache Commons FileUpload |
 
 ---
-
-## 🎯 Key Concepts Explained
-
-### **1. Why P2P Instead of Cloud Storage?**
-
-**Advantages:**
-- ✅ No server storage costs
-- ✅ Direct transfer = faster speeds
-- ✅ Files never stored permanently
-- ✅ Better privacy (no server retention)
-
-**Trade-offs:**
-- ❌ Both peers must be online
-- ❌ Single-use transfers
-
-### **2. Thread-Safe Concurrent Access**
-
-```java
-// ❌ NOT Thread-Safe
-HashMap<Integer, String> map = new HashMap<>();
-map.put(port, file); // Race condition!
-
-// ✅ Thread-Safe
-ConcurrentHashMap<Integer, String> map = new ConcurrentHashMap<>();
-map.put(port, file); // Atomic operation
-```
-
-### **3. Streaming vs Loading**
-
-```java
-// ❌ Memory-intensive (loads entire file)
-byte[] fileData = Files.readAllBytes(path);
-
-// ✅ Memory-efficient (8KB chunks)
-byte[] buffer = new byte[8192];
-while ((bytesRead = input.read(buffer)) != -1) {
-    output.write(buffer, 0, bytesRead);
-}
-```
-
-### **4. Defense in Depth**
-
-Multiple security layers ensure that if one fails, others still protect:
-
-```
-User Request
-    ↓
-[Rate Limiter]     ← Layer 1: Prevent spam
-    ↓
-[File Validator]   ← Layer 2: Block malicious files
-    ↓
-[Size Checker]     ← Layer 3: Prevent DoS
-    ↓
-[PIN Validator]    ← Layer 4: Authentication
-    ↓
-File Transfer
-```
-
----
-
 
 ## Author
 
 **Arnav Thakur**
-- GitHub: [@Techtronics](https://github.com/Techtronics21)
+- GitHub: [@Techtronics21](https://github.com/Techtronics21)
 - LinkedIn: [Arnav Thakur](https://www.linkedin.com/in/arnav-thakur-788700189/)
-

@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "axios": "^1.6.2",
+    "framer-motion": "^12.29.2",
+    "lucide-react": "^0.563.0",
     "next": "^14.0.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

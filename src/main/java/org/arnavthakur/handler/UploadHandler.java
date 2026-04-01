@@ -1,63 +1,54 @@
-
 package org.arnavthakur.handler;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 import org.arnavthakur.service.FileSharer;
-import org.arnavthakur.utils.MultiParser;
+import org.arnavthakur.utils.FixedWindowRateLimiter;
+import org.arnavthakur.utils.HeaderUtils;
+import org.arnavthakur.utils.StreamingMultipartParser;
 
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
 public class UploadHandler implements HttpHandler {
-    private final String uploadDir;
     private final FileSharer fileSharer;
     // Maximum file size: 500MB
     private static final long MAX_FILE_SIZE = 500L * 1024 * 1024; // 500MB in bytes
 
     private static final int MAX_UPLOADS_PER_MINUTE = 10; // Maximum uploads allowed per minute
     private static final long ONE_MINUTE_MS = 60_000; // One minute in milliseconds
+    private static final Pattern CONTENT_LENGTH_PATTERN = Pattern.compile("^\\d+$");
 
     // Allowed file extensions and MIME types (security whitelist)
     private static final String[] ALLOWED_EXTENSIONS = {
-        ".txt", ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".zip", ".doc", ".docx", ".csv"
+            ".txt", ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".zip", ".doc", ".docx", ".csv"
     };
     private static final String[] ALLOWED_MIME_TYPES = {
-        "text/plain", "application/pdf", "image/jpeg", "image/png", "image/gif",
-        "application/zip", "application/x-zip-compressed", "application/x-zip", "application/octet-stream",
-        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "text/csv"
-    };
+            "text/plain", "application/pdf", "image/jpeg", "image/png", "image/gif",
+            "application/zip", "application/x-zip-compressed", "application/x-zip", "application/octet-stream",
+            "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text/csv"
+    }; // mime types is different from extensions because some browsers send generic
+       // types
 
-    // This map keeps track of each IP's upload info
-    // Key: IP address, Value: UploadInfo object
-    private static final ConcurrentHashMap<String, UploadInfo> uploadTracker = new ConcurrentHashMap<>();
+    private static final FixedWindowRateLimiter uploadRateLimiter = new FixedWindowRateLimiter(MAX_UPLOADS_PER_MINUTE,
+            ONE_MINUTE_MS);
 
-    // This class stores info about uploads for one IP
-    private static class UploadInfo {
-        long minuteWindowStart; // When the current minute started
-        int uploadCount;        // How many uploads so far in this minute
-        UploadInfo(long minuteWindowStart) {
-            this.minuteWindowStart = minuteWindowStart;
-            this.uploadCount = 1;
-        }
-    }
-
-    public UploadHandler(String uploadDir, FileSharer fileSharer) {
-        this.uploadDir = uploadDir;
+    public UploadHandler(FileSharer fileSharer) {
         this.fileSharer = fileSharer;
     }
 
     // Helper method to check if file extension is allowed
     private boolean isAllowedExtension(String filename) {
-        if (filename == null) return false;
+        if (filename == null)
+            return false;
         String lower = filename.toLowerCase();
         for (String ext : ALLOWED_EXTENSIONS) {
             if (lower.endsWith(ext)) {
@@ -69,7 +60,8 @@ public class UploadHandler implements HttpHandler {
 
     // Helper method to check if MIME type is allowed
     private boolean isAllowedMimeType(String mimeType) {
-        if (mimeType == null) return false;
+        if (mimeType == null)
+            return false;
         for (String allowed : ALLOWED_MIME_TYPES) {
             if (mimeType.toLowerCase().contains(allowed.toLowerCase())) {
                 return true;
@@ -102,26 +94,22 @@ public class UploadHandler implements HttpHandler {
 
         // Get the user's IP address
         String userIp = exchange.getRemoteAddress().getAddress().getHostAddress();
-        long currentTime = System.currentTimeMillis();
+        if (!uploadRateLimiter.allow(userIp)) {
+            String response = "Rate limit exceeded: Max " + MAX_UPLOADS_PER_MINUTE + " uploads per minute.";
+            exchange.sendResponseHeaders(429, response.getBytes().length); // 429 Too Many Requests
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response.getBytes());
+            }
+            return;
+        }
 
-        // Look up this IP in our tracker map
-        UploadInfo info = uploadTracker.get(userIp);
-
-        if (info == null) {
-            // First upload from this IP, start a new minute window
-            info = new UploadInfo(currentTime);
-            uploadTracker.put(userIp, info);
-        } else if (currentTime - info.minuteWindowStart > ONE_MINUTE_MS) {
-            // It's a new minute, reset the counter
-            info.minuteWindowStart = currentTime;
-            info.uploadCount = 1;
-        } else {
-            // Still in the same minute, increase the count
-            info.uploadCount++;
-            if (info.uploadCount > MAX_UPLOADS_PER_MINUTE) {
-                // Too many uploads! Block this request
-                String response = "Rate limit exceeded: Max " + MAX_UPLOADS_PER_MINUTE + " uploads per minute.";
-                exchange.sendResponseHeaders(429, response.getBytes().length); // 429 Too Many Requests
+        Headers requestHeaders = exchange.getRequestHeaders();
+        String contentLengthHeader = requestHeaders.getFirst("Content-Length");
+        if (contentLengthHeader != null && CONTENT_LENGTH_PATTERN.matcher(contentLengthHeader.trim()).matches()) {
+            long contentLength = Long.parseLong(contentLengthHeader.trim());
+            if (contentLength > MAX_FILE_SIZE) {
+                String response = "File too large: Maximum file size is " + (MAX_FILE_SIZE / (1024 * 1024)) + "MB";
+                exchange.sendResponseHeaders(413, response.getBytes().length);
                 try (OutputStream os = exchange.getResponseBody()) {
                     os.write(response.getBytes());
                 }
@@ -129,8 +117,6 @@ public class UploadHandler implements HttpHandler {
             }
         }
 
-        Headers requestHeaders = exchange.getRequestHeaders();
-        // ...existing code...
         String contentType = null;
         for (String key : requestHeaders.keySet()) {
             if (key != null && key.equalsIgnoreCase("Content-Type")) {
@@ -159,58 +145,28 @@ public class UploadHandler implements HttpHandler {
             }
             String boundary = contentType.substring(bIdx + 9).trim();
             int scIdx = boundary.indexOf(';');
-            if (scIdx != -1) boundary = boundary.substring(0, scIdx).trim();
+            if (scIdx != -1)
+                boundary = boundary.substring(0, scIdx).trim();
             if (boundary.startsWith("\"") && boundary.endsWith("\"")) {
                 boundary = boundary.substring(1, boundary.length() - 1);
             }
-            
-            // Check 2: Read request body with size limit (second line of defense)
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int bytesRead;
-            long totalBytesRead = 0;
-            
-            while ((bytesRead = exchange.getRequestBody().read(buffer)) != -1) {
-                totalBytesRead += bytesRead;
-                if (totalBytesRead > MAX_FILE_SIZE) {
-                    String response = "File too large: Maximum file size is " + (MAX_FILE_SIZE / (1024 * 1024)) + "MB";
-                    exchange.sendResponseHeaders(413, response.getBytes().length);
-                    try (OutputStream os = exchange.getResponseBody()) {
-                        os.write(response.getBytes());
-                    }
-                    return;
-                }
-                baos.write(buffer, 0, bytesRead);
-            }
-            byte[] requestData = baos.toByteArray();
 
-            MultiParser multiParser = new MultiParser(requestData, boundary);
-            MultiParser.ParseResult result = multiParser.parse();
-
-            if (result == null) {
-                String response = "Bad request: Could not parse file content";
-                exchange.sendResponseHeaders(400, response.getBytes().length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(response.getBytes());
-                }
-                return;
-            }
-            
-            // Check 3: Validate actual file content size (third line of defense)
-            if (result.fileContent != null && result.fileContent.length > MAX_FILE_SIZE) {
-                String response = "File too large: Maximum file size is " + (MAX_FILE_SIZE / (1024 * 1024)) + "MB";
-                exchange.sendResponseHeaders(413, response.getBytes().length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(response.getBytes());
-                }
-                return;
+            String uploadDir = System.getProperty("java.io.tmpdir") + java.io.File.separator + "peerlink-uploads";
+            File dir = new File(uploadDir);
+            if (!dir.exists()) {
+                dir.mkdirs();
             }
 
-            String filename = result.fileName;
+            StreamingMultipartParser parser = new StreamingMultipartParser(exchange.getRequestBody(), boundary,
+                    MAX_FILE_SIZE);
+            StreamingMultipartParser.PartHeaders partHeaders = parser.readHeaders();
+
+            String filename = partHeaders.getFileName();
             if (filename == null || filename.trim().isEmpty()) {
                 filename = "unnamed-file.txt";
             }
-            
+            filename = HeaderUtils.sanitizeFilename(filename, "unnamed-file.txt");
+
             // Check 4: Validate file extension (block executables and malicious files)
             if (!isAllowedExtension(filename)) {
                 String response = "File type not allowed. Allowed extensions: .txt, .pdf, .jpg, .jpeg, .png, .gif, .zip, .doc, .docx, .csv";
@@ -220,9 +176,9 @@ public class UploadHandler implements HttpHandler {
                 }
                 return;
             }
-            
+
             // Check 5: Validate MIME type from multipart Content-Type (extra safety layer)
-            String fileMimeType = result.contentType;
+            String fileMimeType = partHeaders.getContentType();
             if (!isAllowedMimeType(fileMimeType)) {
                 String response = "MIME type not allowed. Allowed types: text/plain, application/pdf, image/jpeg, image/png, image/gif, application/zip, application/octet-stream, application/msword, text/csv";
                 exchange.sendResponseHeaders(415, response.getBytes().length);
@@ -231,31 +187,80 @@ public class UploadHandler implements HttpHandler {
                 }
                 return;
             }
-            
-            String uniqueFileName = UUID.randomUUID() + "_" + new File(filename).getName();
-            String filePath = uploadDir + File.separator + uniqueFileName;
 
-            try (FileOutputStream fos = new FileOutputStream(filePath)) {
-                fos.write(result.fileContent);
+            // Check transfer mode via header (X-Transfer-Mode: socket or default to s3)
+            String transferMode = exchange.getRequestHeaders().getFirst("X-Transfer-Mode");
+            String token;
+            String uniqueFileName = UUID.randomUUID() + "_" + filename;
+            File tempFile = new File(dir, uniqueFileName);
+            long streamedFileSize;
+
+            try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                streamedFileSize = parser.streamPart(fos);
+            } catch (IOException e) {
+                if (tempFile.exists()) {
+                    tempFile.delete();
+                }
+                if (e.getMessage() != null && e.getMessage().startsWith("File too large")) {
+                    String response = e.getMessage();
+                    exchange.sendResponseHeaders(413, response.getBytes().length);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(response.getBytes());
+                    }
+                    return;
+                }
+                throw e;
             }
 
-            int port = fileSharer.offerFile(filePath);
-            String token = fileSharer.getToken(port); // Get the access token
-            new Thread(() -> fileSharer.startFileServer(port)).start();
+            // Determine if we should use Socket mode
+            // Use socket if: explicitly requested OR if S3 is not available
+            boolean useSocketMode = "socket".equalsIgnoreCase(transferMode) || !fileSharer.isS3Available();
 
-            // Return both port and token in JSON response
-            String jsonResponse = "{\"port\": " + port + ", \"token\": \"" + token + "\"}";
+            if (useSocketMode) {
+                token = fileSharer.uploadFileViaSocket(tempFile.getAbsolutePath());
+                System.out.println("✅ [SOCKET P2P] Upload successful | IP: " + userIp + " | Token: " + token);
+            } else {
+                try (FileInputStream fis = new FileInputStream(tempFile)) {
+                    token = fileSharer.uploadFile(fis, streamedFileSize, filename, fileMimeType);
+                    System.out.println("✅ [S3 RELAY] Upload successful | IP: " + userIp + " | Token: " + token
+                            + " | File: " + filename);
+                } finally {
+                    if (tempFile.exists()) {
+                        tempFile.delete();
+                    }
+                }
+            }
+
+            // Return token in JSON response
+            StringBuilder sb = new StringBuilder();
+            sb.append('{');
+            sb.append("\"token\": \"").append(token).append('\"');
+            // If socket mode, include port for frontend convenience
+            if (useSocketMode) {
+                Integer assignedPort = fileSharer.getPortByToken(token);
+                if (assignedPort != null) {
+                    sb.append(", \"port\": ").append(assignedPort);
+                }
+            }
+            sb.append('}');
+            String jsonResponse = sb.toString();
             headers.add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, jsonResponse.getBytes().length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(jsonResponse.getBytes());
             }
-        } catch (IOException ex) {
-            System.err.println("Error processing file upload: " + ex.getMessage());
-            String response = "Server error: " + ex.getMessage();
-            exchange.sendResponseHeaders(500, response.getBytes().length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(response.getBytes());
+        } catch (Exception ex) {
+            System.err.println("❌ Error processing file upload: " + ex.getMessage());
+            ex.printStackTrace();
+            String response = "{\"error\": \"" + ex.getMessage().replace("\"", "'") + "\"}";
+            headers.add("Content-Type", "application/json");
+            try {
+                exchange.sendResponseHeaders(500, response.getBytes().length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(response.getBytes());
+                }
+            } catch (IOException e) {
+                System.err.println("Failed to send error response: " + e.getMessage());
             }
         }
     }

@@ -5,13 +5,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, X, File as FileIcon, CheckCircle, AlertCircle } from 'lucide-react';
 
 interface FileUploadProps {
-  onUploadComplete: (data: { port: number; token: string }) => void;
+  // Parent will handle upload; FileUpload only selects the file and notifies parent.
+  onFileUpload: (file: File) => void;
+  isUploading?: boolean;
+  uploadProgress?: number;
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ onUploadComplete }) => {
+const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, isUploading = false, uploadProgress = 0 }) => {
   const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null); // Added error state
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -19,7 +20,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadComplete }) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
       setError(null); // Clear errors when a new file is selected
-      setUploadProgress(0);
     }
   };
 
@@ -28,69 +28,17 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadComplete }) => {
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       setFile(e.dataTransfer.files[0]);
       setError(null);
-      setUploadProgress(0);
     }
   };
 
   const handleUpload = () => {
     if (!file) return;
-
-    setUploading(true);
-    setError(null);
-    setUploadProgress(0);
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const xhr = new XMLHttpRequest();
-
-    // Track upload progress
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percentComplete = (event.loaded / event.total) * 100;
-        setUploadProgress(percentComplete);
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status === 200) {
-        try {
-          const response = JSON.parse(xhr.responseText);
-          setUploading(false);
-          onUploadComplete(response);
-        } catch (e) {
-          setError('Invalid server response');
-          setUploading(false);
-        }
-      } else {
-        // Handle specific backend errors
-        setUploading(false);
-        setUploadProgress(0);
-
-        if (xhr.status === 429) {
-          // Handled per UploadHandler.java rate limiting
-          setError("Please wait: You are uploading too fast (Limit: 10 uploads/min).");
-        } else if (xhr.status === 413) {
-          // Handled per UploadHandler.java MAX_FILE_SIZE (500MB)
-          setError("Upload failed: The file is too large (Max 500MB).");
-        } else if (xhr.status === 415) {
-          // Handled per UploadHandler.java whitelist checks
-          setError("Upload failed: This file type is not supported.");
-        } else {
-          // Fallback for 400, 500, etc.
-          setError(`Upload failed: ${xhr.responseText || 'Server error'}`);
-        }
-      }
-    };
-
-    xhr.onerror = () => {
-      setUploading(false);
-      setError('Connection failed. Please check if the server is running.');
-    };
-
-    // Ensure this matches your backend URL
-    xhr.open('POST', 'http://localhost:8080/upload');
-    xhr.send(formData);
+    // Delegate upload to parent (page.tsx uses axios to upload and track progress)
+    try {
+      onFileUpload(file);
+    } catch (e) {
+      setError('Failed to start upload');
+    }
   };
 
   return (
@@ -158,7 +106,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadComplete }) => {
                     {(file.size / (1024 * 1024)).toFixed(2)} MB
                   </p>
                   
-                  {uploading ? (
+                  {isUploading ? (
                     <div className="space-y-2">
                       <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                         <motion.div
