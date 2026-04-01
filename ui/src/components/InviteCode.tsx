@@ -13,9 +13,38 @@ export default function InviteCode({ port, token }: InviteCodeProps) {
   if (!token) return null;
 
   const copyTokenToClipboard = () => {
-    navigator.clipboard.writeText(token);
-    setCopiedToken(true);
-    setTimeout(() => setCopiedToken(false), 2000);
+    // If navigator.clipboard is available (Secure Context/Localhost)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(token).then(() => {
+        setCopiedToken(true);
+        setTimeout(() => setCopiedToken(false), 2000);
+      });
+      return;
+    }
+
+    // Fallback for non-secure context (HTTP over LAN)
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = token;
+
+      // Ensure the textarea is off-screen
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      const successful = document.execCommand('copy');
+      if (successful) {
+        setCopiedToken(true);
+        setTimeout(() => setCopiedToken(false), 2000);
+      }
+      document.body.removeChild(textArea);
+    } catch (err) {
+      console.error('Fallback copy failed:', err);
+    }
   };
 
   return (

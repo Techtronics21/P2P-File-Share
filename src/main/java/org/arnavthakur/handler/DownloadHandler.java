@@ -80,6 +80,11 @@ public class DownloadHandler implements HttpHandler {
         // Check transfer mode
         FileSharer.TransferMode mode = fileSharer.getTransferMode(token);
 
+        if (mode == null) {
+            sendError(exchange, 403, "Invalid or expired token.");
+            return;
+        }
+
         if (mode == FileSharer.TransferMode.SOCKET_P2P) {
             // Socket mode: Stream file directly to browser
             Integer port = fileSharer.getPortByToken(token);

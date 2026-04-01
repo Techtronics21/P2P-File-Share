@@ -1,36 +1,40 @@
 # 🔗 PeerLink — Secure Hybrid File Sharing
 
-PeerLink is a secure file sharing system with a **hybrid architecture** supporting three transfer modes: **S3 Relay** for asynchronous cloud-based sharing, **WebSocket Relay** for real-time P2P streaming (zero server storage), and **Socket P2P** for direct TCP transfers. Built with Java (backend) and Next.js (frontend).
+PeerLink is a secure file sharing system with a **hybrid architecture** supporting two transfer modes: **S3 Relay** for asynchronous cloud-based sharing, **WebSocket Relay** for real-time P2P streaming (zero server storage). Built with Java (backend) and Next.js (frontend).
 
 ![Java](https://img.shields.io/badge/Java-17-orange?style=flat)
 ![NextJS](https://img.shields.io/badge/Next.js-14-black?style=flat)
 ![Maven](https://img.shields.io/badge/Maven-3.9-red?style=flat)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat)
 
----
+## Table of Contents
 
-## ✨ Features
-
-- **⚡ WebSocket P2P Relay**: Real-time file streaming — file passes through server memory, never touches disk
-- **☁️ S3 Cloud Relay**: Upload once, download anytime — supports asynchronous sharing
-- **🔐 PIN-Based Access**: 12-character cryptographically secure tokens (72-bit entropy)
-- **📡 Dual-Port Architecture**: HTTP API (`:8080`) + WebSocket relay (`:8081`)
-- **🛡️ Defense-in-Depth Security**: Rate limiting, file validation, filename sanitization, path traversal prevention
-- **📁 Streaming Architecture**: Constant memory usage regardless of file size (8KB–64KB buffers)
-- **🔒 Thread-Safe**: `ConcurrentHashMap`, `LinkedBlockingQueue`, atomic operations
-- **🎨 Modern UI**: Mode selection toggle, real-time transfer progress, responsive design
+[Features](#features) · [Architecture](#architecture) · [Technology Stack](#technology-stack) · [Security](#security) · [Getting Started](#getting-started) · [Project Structure](#project-structure) · [API Reference](#api-reference) · [Key Design Decisions](#key-design-decisions) · [Author](#author)
 
 ---
 
-## 🏗️ Architecture
+## Features
 
-### Three Transfer Modes
+- **WebSocket P2P Relay**: Real-time file streaming — file passes through server memory, never touches disk
+- **S3 Cloud Relay**: Upload once, download anytime — supports asynchronous sharing
+- **PIN-Based Access**: 12-character cryptographically secure tokens
+
+- **Dual-Port Architecture**: HTTP API (`:8080`) + WebSocket relay (`:8081`)
+- **Defense-in-Depth Security**: Rate limiting, file validation, filename sanitization, path traversal prevention
+- **Streaming Architecture**: Constant memory usage regardless of file size (8KB–64KB buffers)
+- **Thread-Safe**: `ConcurrentHashMap`, `LinkedBlockingQueue`, atomic operations
+- **Modern UI**: Mode selection toggle, real-time transfer progress, responsive design
+
+---
+
+## Architecture
+
+### 2 Transfer Modes
 
 | Mode | User Selects | How It Works | File Stored On |
 |------|-------------|-------------|----------------|
-| **WebSocket Relay** | ⚡ Share Now | File streams from sender → server (memory) → receiver in real-time | **Nowhere** (zero disk) |
-| **S3 Relay** | ☁️ Upload & Share Later | File uploaded to AWS S3, downloaded later via pre-signed URL | AWS S3 |
-| **Socket P2P** | CLI: `X-Transfer-Mode: socket` | File saved to temp dir, served via ephemeral TCP port | Local disk |
+| **WebSocket Relay** | Share Now | File streams from sender → server (memory) → receiver in real-time | **Nowhere** (zero disk) |
+| **S3 Relay** | Upload & Share Later | File uploaded to AWS S3, downloaded later via pre-signed URL | AWS S3 |
 
 ### System Diagram
 
@@ -39,7 +43,7 @@ PeerLink is a secure file sharing system with a **hybrid architecture** supporti
 │                     FRONTEND (Port 3000)                      │
 │  Next.js + React + TypeScript                                 │
 │                                                               │
-│  ⚡ Share Now          ☁️ Upload & Share Later                │
+│   Share Now           Upload & Share Later                    │
 │  POST /register        POST /upload (multipart)               │
 │  + WebSocket conn      + axios progress tracking              │
 └──────────────┬─────────────────┬──────────────────────────────┘
@@ -56,12 +60,12 @@ PeerLink is a secure file sharing system with a **hybrid architecture** supporti
 │       ▼                  ▼                 ▼                   │
 │  ┌─────────────── FileSharer (Service) ──────────────────┐    │
 │  │  Token generation (SecureRandom)                       │    │
-│  │  Mode routing: S3_RELAY / WEBSOCKET_RELAY / SOCKET_P2P │    │
+│  │  Mode routing: S3_RELAY / WEBSOCKET_RELAY              │    │
 │  │  Cleanup after download (mode-aware)                   │    │
-│  └────────┬──────────────┬──────────────┬────────────────┘    │
-│           │              │              │                      │
-│     S3Service      RelayServer     ServerSocket                │
-│     (AWS SDK)      (WS :8081)      (ephemeral)                │
+│  └────────┬──────────────┬───────────────────────────────┘    │
+│           │              │                                     │
+│     S3Service      RelayServer                                │
+│     (AWS SDK)      (WS :8081)                                 │
 │                    BlockingQueue                               │
 │                    relay bridge                                │
 └───────────────────────────────────────────────────────────────┘
@@ -93,7 +97,7 @@ Sender                        Server                       Receiver
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 ### Backend
 - **Java 17** — `com.sun.net.httpserver` for HTTP, no framework (hand-rolled routing, CORS, multipart parsing)
@@ -110,7 +114,7 @@ Sender                        Server                       Receiver
 
 ---
 
-## 🔒 Security
+## Security
 
 | Layer | Protection | Implementation |
 |-------|-----------|----------------|
@@ -125,7 +129,7 @@ Sender                        Server                       Receiver
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Java 17+
@@ -152,8 +156,8 @@ cd ui && npm install && cd ..
 **Terminal 1 — Backend:**
 ```bash
 java -jar target/p2p-1.0-SNAPSHOT-shaded.jar
-# 🚀 API server started on port 8080
-# 🔌 WebSocket relay on port 8081
+# API server started on port 8080
+# WebSocket relay on port 8081
 ```
 
 **Terminal 2 — Frontend:**
@@ -162,9 +166,9 @@ cd ui && npm run dev
 # ▲ Next.js on http://localhost:3000
 ```
 
-### LAN Access (from other devices)
+### If you want to make your device a server for others to use:
 
-Update `ui/.env.local`:
+Make a file `ui/.env.local`:
 ```
 NEXT_PUBLIC_API_URL=http://YOUR_IP:8080
 NEXT_PUBLIC_WS_URL=ws://YOUR_IP:8081
@@ -173,7 +177,7 @@ Then restart the frontend. Others can access at `http://YOUR_IP:3000`.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 PeerLink/
@@ -212,7 +216,7 @@ PeerLink/
 
 ---
 
-## 📡 API Reference
+## API Reference
 
 ### `POST /register` — Register a WebSocket relay share
 ```json
@@ -235,7 +239,6 @@ Response: { "token": "aBcDeFgHiJkL" }
 Routes automatically based on transfer mode:
 - **WEBSOCKET_RELAY** → Signals uploader's WS, relays binary frames to response
 - **S3_RELAY** → Streams from S3 with Content-Disposition header
-- **SOCKET_P2P** → Streams from local disk
 
 ### `ws://server:8081/relay?token={PIN}` — WebSocket relay
 Protocol:
@@ -245,7 +248,7 @@ Protocol:
 
 ---
 
-## 🧠 Key Design Decisions
+## Key Design Decisions
 
 | Decision | Why | Alternative |
 |----------|-----|-------------|

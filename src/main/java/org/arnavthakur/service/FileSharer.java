@@ -72,11 +72,13 @@ public class FileSharer {
     }
 
     /**
-     * Generate a random 6-digit access token
+     * Generate a cryptographically secure, case-insensitive, readable access token.
+     * Uses a 12-character format with 32 possible uppercase characters (60 bits of entropy).
+     * Excludes similar-looking characters: O, 0, I, 1, L.
      */
     private String generateAccessToken() {
-        // URL-safe character set (64 characters)
-        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        // Upper-case only, readable character set (32 chars)
+        String chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
         java.security.SecureRandom random = new java.security.SecureRandom();
         StringBuilder sb = new StringBuilder(12);
         for (int i = 0; i < 12; i++) {
@@ -143,7 +145,8 @@ public class FileSharer {
      * Get relay session by token (WebSocket mode)
      */
     public RelaySession getRelaySession(String token) {
-        return relaySessions.get(token);
+        if (token == null) return null;
+        return relaySessions.get(token.toUpperCase());
     }
 
     /**
@@ -185,10 +188,11 @@ public class FileSharer {
     }
 
     /**
-     * Get transfer mode for token
+     * Get transfer mode for token. Returns null if token is invalid or expired.
      */
     public TransferMode getTransferMode(String token) {
-        return tokenMode.getOrDefault(token, TransferMode.S3_RELAY);
+        if (token == null) return null;
+        return tokenMode.get(token.toUpperCase()); 
     }
 
     /**
@@ -226,21 +230,22 @@ public class FileSharer {
      * @return S3 object key or null
      */
     private String getS3Key(String token) {
-        if (s3Service == null) {
+        if (token == null || s3Service == null) {
             return null; // S3 not available
         }
 
+        String normalizedToken = token.toUpperCase();
         // First check in-memory cache
-        String s3Key = tokenToS3Key.get(token);
+        String s3Key = tokenToS3Key.get(normalizedToken);
         if (s3Key != null) {
             return s3Key;
         }
 
         // Fallback: search S3 bucket (in case server restarted)
-        s3Key = s3Service.findS3KeyByToken(token);
+        s3Key = s3Service.findS3KeyByToken(normalizedToken);
         if (s3Key != null) {
-            tokenToS3Key.put(token, s3Key); // Cache for future requests
-            System.out.println("📥 Found token in S3: " + token);
+            tokenToS3Key.put(normalizedToken, s3Key); // Cache for future requests
+            System.out.println("📥 Found token in S3: " + normalizedToken);
         }
         return s3Key;
     }
@@ -395,10 +400,12 @@ public class FileSharer {
      * @param token Access token
      */
     public void cleanupAfterDownload(String token) {
-        TransferMode mode = tokenMode.remove(token);
+        if (token == null) return;
+        String normalizedToken = token.toUpperCase();
+        TransferMode mode = tokenMode.remove(normalizedToken);
 
         if (mode == TransferMode.S3_RELAY) {
-            String s3Key = tokenToS3Key.remove(token);
+            String s3Key = tokenToS3Key.remove(normalizedToken);
             if (s3Key != null && s3Service != null) {
                 s3Service.deleteFile(s3Key);
                 System.out.println("🧹 [S3 RELAY] Cleanup complete for token: " + token);

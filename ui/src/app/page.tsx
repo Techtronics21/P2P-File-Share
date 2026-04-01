@@ -193,8 +193,9 @@ export default function Home() {
     setIsDownloading(true);
 
     try {
+      const normalizedToken = (downloadToken || '').trim().toUpperCase();
       const response = await axios.get(
-        `${API_BASE_URL}/download?token=${encodeURIComponent(downloadToken || '')}`,
+        `${API_BASE_URL}/download?token=${encodeURIComponent(normalizedToken)}`,
         { responseType: 'arraybuffer' }
       );
 
@@ -241,13 +242,27 @@ export default function Home() {
     } catch (error: any) {
       console.error('Error downloading file:', error);
       let message = 'Failed to download file. Please check the PIN and try again.';
-      if (typeof error?.response?.data === 'string') {
+
+      // Since responseType is arraybuffer, we need to decode the error data if it's an ArrayBuffer
+      if (error?.response?.data instanceof ArrayBuffer) {
+        try {
+          const decoder = new TextDecoder('utf-8');
+          const decoded = decoder.decode(error.response.data);
+          // Only use if it's a short error message (longer would be HTML/junk)
+          if (decoded && decoded.length < 300) {
+            message = decoded;
+          }
+        } catch (decodeErr) {
+          console.error('Failed to decode error ArrayBuffer', decodeErr);
+        }
+      } else if (typeof error?.response?.data === 'string') {
         message = error.response.data;
       } else if (error?.response?.data?.error) {
         message = error.response.data.error;
       } else if (error?.message) {
         message = error.message;
       }
+
       alert(message);
     } finally {
       setIsDownloading(false);
@@ -267,7 +282,7 @@ export default function Home() {
             className={`px-4 py-2 font-medium ${activeTab === 'upload'
               ? 'text-blue-600 border-b-2 border-blue-600'
               : 'text-gray-500 hover:text-gray-700'
-            }`}
+              }`}
             onClick={() => setActiveTab('upload')}
           >
             Share a File
@@ -276,7 +291,7 @@ export default function Home() {
             className={`px-4 py-2 font-medium ${activeTab === 'download'
               ? 'text-blue-600 border-b-2 border-blue-600'
               : 'text-gray-500 hover:text-gray-700'
-            }`}
+              }`}
             onClick={() => setActiveTab('download')}
           >
             Receive a File
@@ -290,11 +305,10 @@ export default function Home() {
               <p className="text-sm font-medium text-gray-700 mb-3">How would you like to share?</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label
-                  className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                    shareMode === 'instant'
+                  className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${shareMode === 'instant'
                       ? 'border-blue-500 bg-blue-50'
                       : 'border-gray-200 hover:border-gray-300'
-                  }`}
+                    }`}
                 >
                   <input
                     type="radio"
@@ -305,18 +319,17 @@ export default function Home() {
                     className="mt-1"
                   />
                   <div>
-                    <span className="font-medium text-gray-800">⚡ Share Now</span>
+                    <span className="font-medium text-gray-800">Share Now</span>
                     <p className="text-xs text-gray-500 mt-0.5">
                       Stream directly to receiver. Keep this tab open.
                     </p>
                   </div>
                 </label>
                 <label
-                  className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                    shareMode === 'cloud'
+                  className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${shareMode === 'cloud'
                       ? 'border-blue-500 bg-blue-50'
                       : 'border-gray-200 hover:border-gray-300'
-                  }`}
+                    }`}
                 >
                   <input
                     type="radio"
@@ -327,7 +340,7 @@ export default function Home() {
                     className="mt-1"
                   />
                   <div>
-                    <span className="font-medium text-gray-800">☁️ Upload & Share Later</span>
+                    <span className="font-medium text-gray-800">Upload & Share Later</span>
                     <p className="text-xs text-gray-500 mt-0.5">
                       Upload to cloud. Receiver downloads anytime.
                     </p>
