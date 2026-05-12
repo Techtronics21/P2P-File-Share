@@ -1,11 +1,8 @@
 package org.arnavthakur.handler;
 
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
 
 import org.arnavthakur.service.FileSharer;
@@ -85,81 +82,7 @@ public class DownloadHandler implements HttpHandler {
             return;
         }
 
-        if (mode == FileSharer.TransferMode.SOCKET_P2P) {
-            // Socket mode: Stream file directly to browser
-            Integer port = fileSharer.getPortByToken(token);
-            if (port == null) {
-                sendError(exchange, 403, "Invalid or expired token");
-                return;
-            }
-
-            String filePath = fileSharer.getFilePath(port);
-            if (filePath == null) {
-                sendError(exchange, 404, "File not found");
-                return;
-            }
-
-            File file = new File(filePath);
-            if (!file.exists()) {
-                sendError(exchange, 404, "File not found");
-                return;
-            }
-
-            // Extract original filename (remove UUID prefix)
-            String fileName = file.getName();
-            int underscoreIndex = fileName.indexOf('_');
-            if (underscoreIndex > 0 && underscoreIndex < fileName.length() - 1) {
-                fileName = fileName.substring(underscoreIndex + 1);
-            }
-            fileName = HeaderUtils.sanitizeFilename(fileName, "downloaded-file");
-
-            String downloadMode = exchange.getRequestHeaders().getFirst("X-Download-Mode");
-            if ("socket".equalsIgnoreCase(downloadMode)) {
-                String hostHeader = exchange.getRequestHeaders().getFirst("Host");
-                String host = "localhost";
-                if (hostHeader != null && !hostHeader.isBlank()) {
-                    host = hostHeader.split(":", 2)[0];
-                }
-
-                String jsonResponse = String.format(
-                        "{\"host\":\"%s\",\"port\":%d,\"filename\":\"%s\"}",
-                        escapeJson(host),
-                        port,
-                        escapeJson(fileName)
-                );
-                headers.add("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, jsonResponse.getBytes(StandardCharsets.UTF_8).length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(jsonResponse.getBytes(StandardCharsets.UTF_8));
-                }
-                return;
-            }
-
-            System.out.println("📥 [SOCKET P2P] Browser download | Token: " + token + " | File: " + fileName);
-
-            // Set headers for file download
-            headers.add("Content-Type", "application/octet-stream");
-            headers.add("Content-Disposition", HeaderUtils.buildAttachmentDisposition(fileName));
-            headers.add("Content-Length", String.valueOf(file.length()));
-
-            exchange.sendResponseHeaders(200, file.length());
-
-            // Stream file to browser
-            try (FileInputStream fis = new FileInputStream(file);
-                 OutputStream os = exchange.getResponseBody()) {
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                while ((bytesRead = fis.read(buffer)) != -1) {
-                    os.write(buffer, 0, bytesRead);
-                }
-            }
-
-            System.out.println("✅ [SOCKET P2P] File downloaded successfully: " + fileName);
-
-            // Cleanup after download
-            fileSharer.cleanupAfterDownload(token);
-
-        } else if (mode == FileSharer.TransferMode.WEBSOCKET_RELAY) {
+        if (mode == FileSharer.TransferMode.WEBSOCKET_RELAY) {
             // WebSocket relay: stream file directly from uploader's browser
 
             org.arnavthakur.service.RelaySession session = fileSharer.getRelaySession(token);
@@ -248,9 +171,4 @@ public class DownloadHandler implements HttpHandler {
         }
     }
 
-    private String escapeJson(String value) {
-        return value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"");
-    }
 }

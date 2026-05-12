@@ -188,8 +188,8 @@ public class UploadHandler implements HttpHandler {
                 return;
             }
 
-            // Check transfer mode via header (X-Transfer-Mode: socket or default to s3)
-            String transferMode = exchange.getRequestHeaders().getFirst("X-Transfer-Mode");
+            // S3 upload mode
+
             String token;
             String uniqueFileName = UUID.randomUUID() + "_" + filename;
             File tempFile = new File(dir, uniqueFileName);
@@ -212,22 +212,13 @@ public class UploadHandler implements HttpHandler {
                 throw e;
             }
 
-            // Determine if we should use Socket mode
-            // Use socket if: explicitly requested OR if S3 is not available
-            boolean useSocketMode = "socket".equalsIgnoreCase(transferMode) || !fileSharer.isS3Available();
-
-            if (useSocketMode) {
-                token = fileSharer.uploadFileViaSocket(tempFile.getAbsolutePath());
-                System.out.println("✅ [SOCKET P2P] Upload successful | IP: " + userIp + " | Token: " + token);
-            } else {
-                try (FileInputStream fis = new FileInputStream(tempFile)) {
-                    token = fileSharer.uploadFile(fis, streamedFileSize, filename, fileMimeType);
-                    System.out.println("✅ [S3 RELAY] Upload successful | IP: " + userIp + " | Token: " + token
-                            + " | File: " + filename);
-                } finally {
-                    if (tempFile.exists()) {
-                        tempFile.delete();
-                    }
+            try (FileInputStream fis = new FileInputStream(tempFile)) {
+                token = fileSharer.uploadFile(fis, streamedFileSize, filename, fileMimeType);
+                System.out.println("✅ [S3 RELAY] Upload successful | IP: " + userIp + " | Token: " + token
+                        + " | File: " + filename);
+            } finally {
+                if (tempFile.exists()) {
+                    tempFile.delete();
                 }
             }
 
@@ -235,13 +226,6 @@ public class UploadHandler implements HttpHandler {
             StringBuilder sb = new StringBuilder();
             sb.append('{');
             sb.append("\"token\": \"").append(token).append('\"');
-            // If socket mode, include port for frontend convenience
-            if (useSocketMode) {
-                Integer assignedPort = fileSharer.getPortByToken(token);
-                if (assignedPort != null) {
-                    sb.append(", \"port\": ").append(assignedPort);
-                }
-            }
             sb.append('}');
             String jsonResponse = sb.toString();
             headers.add("Content-Type", "application/json");

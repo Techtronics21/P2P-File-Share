@@ -10,6 +10,47 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8081';
 const CHUNK_SIZE = 64 * 1024; // 64KB chunks for WebSocket relay
 
+// ─── E2E Encryption helpers (AES-256-GCM via Web Crypto API) ───────────────
+// The key never leaves the browser — it travels only in the URL #fragment,
+// which browsers never include in HTTP requests (server is blind to it).
+
+async function generateAesKey(): Promise<CryptoKey> {
+  return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+}
+
+async function exportKeyAsBase64(key: CryptoKey): Promise<string> {
+  const raw = await crypto.subtle.exportKey('raw', key);
+  return btoa(String.fromCharCode(...new Uint8Array(raw)));
+}
+
+async function importKeyFromBase64(b64: string): Promise<CryptoKey> {
+  const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt']);
+}
+
+/**
+ * Encrypt one chunk. Returns: [12-byte IV | ciphertext].
+ * Each chunk gets a fresh random IV — reuse impossible even across 500MB files.
+ */
+async function encryptChunk(key: CryptoKey, plaintext: ArrayBuffer): Promise<ArrayBuffer> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  const result = new Uint8Array(12 + ciphertext.byteLength);
+  result.set(iv, 0);
+  result.set(new Uint8Array(ciphertext), 12);
+  return result.buffer;
+}
+
+/**
+ * Decrypt one chunk. Expects: [12-byte IV | ciphertext].
+ */
+async function decryptChunk(key: CryptoKey, data: ArrayBuffer): Promise<ArrayBuffer> {
+  const iv = data.slice(0, 12);
+  const ciphertext = data.slice(12);
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 export default function Home() {
   // Shared state
   const [activeTab, setActiveTab] = useState<'upload' | 'download'>('upload');
@@ -35,8 +76,11 @@ export default function Home() {
   // Download state
   const [isDownloading, setIsDownloading] = useState(false);
 
-  // ─── WebSocket Relay: send file in chunks with backpressure ───
-  const sendFileViaWebSocket = useCallback((ws: WebSocket, file: File) => {
+  // E2E encryption — key lives only in this ref and the URL #fragment (never sent to server)
+  const aesKeyRef = useRef<CryptoKey | null>(null);
+
+  // ─── WebSocket Relay: encrypt + send file in chunks with backpressure ───
+  const sendFileViaWebSocket = useCallback((ws: WebSocket, file: File, aesKey: CryptoKey) => {
     let offset = 0;
 
     const sendNextChunk = () => {
@@ -55,9 +99,12 @@ export default function Home() {
 
       const end = Math.min(offset + CHUNK_SIZE, file.size);
       const chunk = file.slice(offset, end);
-      chunk.arrayBuffer().then((buffer) => {
+      chunk.arrayBuffer().then((plaintext) =>
+        // AES-GCM: prepend fresh 12-byte IV to each ciphertext chunk
+        encryptChunk(aesKey, plaintext)
+      ).then((encrypted) => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(buffer);
+          ws.send(encrypted);
           offset = end;
           setTransferProgress(Math.round((offset / file.size) * 100));
           // Use setTimeout to avoid blocking the UI thread
@@ -79,7 +126,12 @@ export default function Home() {
     setPort(null);
 
     try {
-      // Step 1: Register file metadata (no file upload)
+      // Step 1: Generate AES-256-GCM key — stays in browser only
+      const aesKey = await generateAesKey();
+      aesKeyRef.current = aesKey;
+      const keyB64 = await exportKeyAsBase64(aesKey);
+
+      // Step 2: Register file metadata (no file upload, no key sent to server)
       const response = await axios.post(`${API_BASE_URL}/register`, {
         filename: file.name,
         size: file.size,
@@ -89,7 +141,10 @@ export default function Home() {
       const newToken = response.data.token;
       setToken(newToken);
 
-      // Step 2: Open WebSocket connection
+      // Step 3: Embed key in URL fragment — browsers never send #fragment to the server
+      window.location.hash = `key=${encodeURIComponent(keyB64)}`;
+
+      // Step 4: Open WebSocket connection
       const ws = new WebSocket(`${WS_BASE_URL}/relay?token=${newToken}`);
       wsRef.current = ws;
 
@@ -104,8 +159,8 @@ export default function Home() {
             setWsStatus('waiting');
           } else if (msg.type === 'SEND_FILE') {
             setWsStatus('transferring');
-            if (fileRef.current) {
-              sendFileViaWebSocket(ws, fileRef.current);
+            if (fileRef.current && aesKeyRef.current) {
+              sendFileViaWebSocket(ws, fileRef.current, aesKeyRef.current);
             }
           }
         } catch {
@@ -117,10 +172,9 @@ export default function Home() {
         setWsStatus('error');
       };
 
-      ws.onclose = (event) => {
+      ws.onclose = () => {
         if (wsRef.current === ws) {
           wsRef.current = null;
-          // Only show error if we weren't done
           setWsStatus((prev) => (prev === 'done' ? 'done' : 'idle'));
         }
       };
@@ -188,7 +242,7 @@ export default function Home() {
     }
   };
 
-  // ─── Download handler (unchanged) ───
+  // ─── Download handler ───
   const handleDownload = async (_port: number, downloadToken?: string) => {
     setIsDownloading(true);
 
@@ -230,7 +284,54 @@ export default function Home() {
         filename += extensionFromType(contentType);
       }
 
-      const blob = new Blob([response.data], { type: contentType });
+      // ─── E2E Decryption ─────────────────────────────────────────────────
+      // Read AES key from URL fragment (#key=...) — server never sent or saw this.
+      // Each encrypted chunk is: [12-byte IV | 64KB ciphertext | 16-byte GCM tag]
+      // Total encrypted stride per original 64KB chunk = CHUNK_SIZE + 12 + 16 = CHUNK_SIZE + 28
+      const ENCRYPTED_CHUNK_STRIDE = CHUNK_SIZE + 28;
+      const hash = window.location.hash; // e.g. "#key=base64..."
+      const keyParam = hash.startsWith('#key=') ? hash.slice(5) : null;
+
+      let finalBuffer: ArrayBuffer;
+      if (keyParam) {
+        try {
+          const aesKey = await importKeyFromBase64(decodeURIComponent(keyParam));
+          const encrypted = response.data as ArrayBuffer;
+          const plaintextChunks: ArrayBuffer[] = [];
+          let pos = 0;
+
+          // Split the contiguous arraybuffer into per-chunk [IV|ciphertext] slices and decrypt
+          while (pos < encrypted.byteLength) {
+            const stride = Math.min(ENCRYPTED_CHUNK_STRIDE, encrypted.byteLength - pos);
+            const chunkData = encrypted.slice(pos, pos + stride);
+            const plain = await decryptChunk(aesKey, chunkData);
+            plaintextChunks.push(plain);
+            pos += stride;
+          }
+
+          // Assemble plaintext into one contiguous ArrayBuffer
+          const totalBytes = plaintextChunks.reduce((n, c) => n + c.byteLength, 0);
+          const assembled = new Uint8Array(totalBytes);
+          let byteOffset = 0;
+          for (const chunk of plaintextChunks) {
+            assembled.set(new Uint8Array(chunk), byteOffset);
+            byteOffset += chunk.byteLength;
+          }
+          finalBuffer = assembled.buffer;
+
+          // Clear key from URL bar after successful decryption
+          window.location.hash = '';
+        } catch {
+          alert('Decryption failed — the key in your URL may be wrong or the file was corrupted.');
+          return;
+        }
+      } else {
+        // No key in fragment → S3 mode or share without encryption: use raw buffer directly
+        finalBuffer = response.data as ArrayBuffer;
+      }
+      // ────────────────────────────────────────────────────────────────────
+
+      const blob = new Blob([finalBuffer], { type: contentType });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -243,12 +344,10 @@ export default function Home() {
       console.error('Error downloading file:', error);
       let message = 'Failed to download file. Please check the PIN and try again.';
 
-      // Since responseType is arraybuffer, we need to decode the error data if it's an ArrayBuffer
       if (error?.response?.data instanceof ArrayBuffer) {
         try {
           const decoder = new TextDecoder('utf-8');
           const decoded = decoder.decode(error.response.data);
-          // Only use if it's a short error message (longer would be HTML/junk)
           if (decoded && decoded.length < 300) {
             message = decoded;
           }
@@ -306,8 +405,8 @@ export default function Home() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label
                   className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${shareMode === 'instant'
-                      ? 'border-blue-500 bg-blue-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300'
                     }`}
                 >
                   <input
@@ -327,8 +426,8 @@ export default function Home() {
                 </label>
                 <label
                   className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${shareMode === 'cloud'
-                      ? 'border-blue-500 bg-blue-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300'
                     }`}
                 >
                   <input

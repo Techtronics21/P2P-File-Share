@@ -57,9 +57,9 @@ public class FileController {
                 System.out.println("   Continuing in Socket-only mode...");
             }
         } else {
-            System.out.println("⚠️  AWS credentials not provided - Running in SOCKET-ONLY MODE");
-            System.out.println("   ✅ Socket P2P transfers: WORKING");
-            System.out.println("   ❌ S3 browser uploads: DISABLED (need AWS credentials)");
+            System.out.println("⚠️  AWS credentials not provided - Running in WEBSOCKET-ONLY MODE");
+            System.out.println("   ✅ Share Now (WebSocket relay): WORKING");
+            System.out.println("   ❌ Upload & Share Later (S3): DISABLED (need AWS credentials)");
             System.out.println("   💡 To enable S3: Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
         }
 
@@ -67,7 +67,7 @@ public class FileController {
 
         // Bind to all network interfaces (0.0.0.0) to allow access from other devices
         this.httpServer = HttpServer.create(new InetSocketAddress(port), 0);
-        this.executorService = Executors.newFixedThreadPool(10); //executorService is a type of Executors.
+        this.executorService = Executors.newVirtualThreadPerTaskExecutor(); // Java 21: each blocked queue.poll() parks the virtual thread, not an OS thread → no cap on concurrent relay downloads
 
         // Wire handlers (no longer need uploadDir parameter)
         httpServer.createContext("/upload", new UploadHandler(fileSharer));
