@@ -75,10 +75,20 @@ export default function Home() {
         API_BASE_URL = `http://${hostname}:${javaHttpPort}`;
         WS_BASE_URL  = `ws://${hostname}:${javaWsPort}`;
       } else {
-        // Production: Nginx proxies /api → Java HTTP, /ws → Java WS
-        const origin = window.location.origin;  // e.g. https://peerlink.up.railway.app
-        API_BASE_URL = `${origin}/api`;
-        WS_BASE_URL  = `${isSecure ? 'wss' : 'ws'}://${hostname}${port ? ':' + port : ''}/ws`;
+        // Production: check if env vars point to a separate backend (Vercel + Railway)
+        const envApi = process.env.NEXT_PUBLIC_API_URL;
+        const envWs  = process.env.NEXT_PUBLIC_WS_URL;
+
+        if (envApi) {
+          // Separate frontend/backend deployment (Vercel → Railway)
+          API_BASE_URL = envApi;
+          WS_BASE_URL  = envWs || `${isSecure ? 'wss' : 'ws'}://${hostname}/ws`;
+        } else {
+          // Same-origin deployment (behind Nginx)
+          const origin = window.location.origin;
+          API_BASE_URL = `${origin}/api`;
+          WS_BASE_URL  = `${isSecure ? 'wss' : 'ws'}://${hostname}${port ? ':' + port : ''}/ws`;
+        }
       }
 
       console.log('🌐 MODE:', isLocal ? 'LOCAL DEV' : 'PRODUCTION');
