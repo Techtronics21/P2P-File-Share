@@ -9,12 +9,20 @@ public class App
     public static void main( String[] args )
     {
         try {
-            // Start the API server on port 8080
-            FileController fileController = new FileController(8080);
+            // Read port from environment (cloud providers like Railway set PORT)
+            // Internally, Java always uses 8080 for HTTP and 8081 for WebSocket
+            // Nginx sits in front and maps the external PORT to these internal ones
+            int port = 8080;
+            String envPort = System.getenv("JAVA_HTTP_PORT");
+            if (envPort != null && !envPort.isEmpty()) {
+                try { port = Integer.parseInt(envPort); } catch (NumberFormatException ignored) {}
+            }
+
+            FileController fileController = new FileController(port);
             fileController.start();
 
-            System.out.println("PeerLink server started on port 8080");
-            System.out.println("UI available at http://localhost:3000");
+            System.out.println("PeerLink server started on port " + port);
+            System.out.println("WebSocket relay on port " + (port + 1));
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> { // new thread is created to run the shutdown hook by
                 System.out.println("Shutting down server...");

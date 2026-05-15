@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import FileUpload from '@/components/FileUpload';
 import FileDownload from '@/components/FileDownload';
 import InviteCode from '@/components/InviteCode';
 import axios from 'axios';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
-const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8081';
+// Base URLs — set dynamically on mount
+let API_BASE_URL = '';
+let WS_BASE_URL = '';
 const CHUNK_SIZE = 64 * 1024; // 64KB chunks for WebSocket relay
 
 // ─── E2E Encryption helpers (AES-256-GCM via Web Crypto API) ───────────────
@@ -20,7 +21,7 @@ async function generateAesKey(): Promise<CryptoKey> {
 
 async function exportKeyAsBase64(key: CryptoKey): Promise<string> {
   const raw = await crypto.subtle.exportKey('raw', key);
-  return btoa(String.fromCharCode(...new Uint8Array(raw)));
+  return btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(raw))));
 }
 
 async function importKeyFromBase64(b64: string): Promise<CryptoKey> {
@@ -52,6 +53,40 @@ async function decryptChunk(key: CryptoKey, data: ArrayBuffer): Promise<ArrayBuf
 // ────────────────────────────────────────────────────────────────────────────
 
 export default function Home() {
+  // ─── Dynamic Backend Discovery ───────────────────────────────────────
+  // In PRODUCTION (behind Nginx): everything is on the SAME origin.
+  //   API  = https://peerlink.example.com/api
+  //   WS   = wss://peerlink.example.com/ws
+  // In LOCAL DEV (no Nginx): Java runs on separate ports.
+  //   API  = http://localhost:8080   (or :3001)
+  //   WS   = ws://localhost:8081     (or :3002)
+  // ─────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const { hostname, protocol, port } = window.location;
+      const isSecure = protocol === 'https:';
+      const isLocal = hostname === 'localhost' || hostname === '127.0.0.1'
+        || hostname.startsWith('10.') || hostname.startsWith('192.168.');
+
+      if (isLocal) {
+        // Local dev: UI is on :3000, Java HTTP on :3001, Java WS on :3002
+        const javaHttpPort = parseInt(port || '3000') + 1;   // 3001
+        const javaWsPort   = parseInt(port || '3000') + 2;   // 3002
+        API_BASE_URL = `http://${hostname}:${javaHttpPort}`;
+        WS_BASE_URL  = `ws://${hostname}:${javaWsPort}`;
+      } else {
+        // Production: Nginx proxies /api → Java HTTP, /ws → Java WS
+        const origin = window.location.origin;  // e.g. https://peerlink.up.railway.app
+        API_BASE_URL = `${origin}/api`;
+        WS_BASE_URL  = `${isSecure ? 'wss' : 'ws'}://${hostname}${port ? ':' + port : ''}/ws`;
+      }
+
+      console.log('🌐 MODE:', isLocal ? 'LOCAL DEV' : 'PRODUCTION');
+      console.log('📡 API:', API_BASE_URL);
+      console.log('🔌 WS:', WS_BASE_URL);
+    }
+  }, []);
+
   // Shared state
   const [activeTab, setActiveTab] = useState<'upload' | 'download'>('upload');
   const [token, setToken] = useState<string | null>(null);
@@ -80,7 +115,7 @@ export default function Home() {
   const aesKeyRef = useRef<CryptoKey | null>(null);
 
   // ─── WebSocket Relay: encrypt + send file in chunks with backpressure ───
-  const sendFileViaWebSocket = useCallback((ws: WebSocket, file: File, aesKey: CryptoKey) => {
+  const sendFileViaWebSocket = useCallback((ws: WebSocket, file: File, aesKey: CryptoKey | null) => {
     let offset = 0;
 
     const sendNextChunk = () => {
@@ -99,12 +134,15 @@ export default function Home() {
 
       const end = Math.min(offset + CHUNK_SIZE, file.size);
       const chunk = file.slice(offset, end);
-      chunk.arrayBuffer().then((plaintext) =>
-        // AES-GCM: prepend fresh 12-byte IV to each ciphertext chunk
-        encryptChunk(aesKey, plaintext)
-      ).then((encrypted) => {
+      chunk.arrayBuffer().then((plaintext) => {
+        // AES-GCM: prepend fresh 12-byte IV to each ciphertext chunk (if key exists)
+        if (aesKey) {
+          return encryptChunk(aesKey, plaintext);
+        }
+        return plaintext; // Send as-is if no encryption
+      }).then((data) => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(encrypted);
+          ws.send(data);
           offset = end;
           setTransferProgress(Math.round((offset / file.size) * 100));
           // Use setTimeout to avoid blocking the UI thread
@@ -127,9 +165,20 @@ export default function Home() {
 
     try {
       // Step 1: Generate AES-256-GCM key — stays in browser only
-      const aesKey = await generateAesKey();
-      aesKeyRef.current = aesKey;
-      const keyB64 = await exportKeyAsBase64(aesKey);
+      let aesKey = null;
+      let keyB64 = null;
+      
+      if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+        try {
+          aesKey = await generateAesKey();
+          aesKeyRef.current = aesKey;
+          keyB64 = await exportKeyAsBase64(aesKey);
+        } catch (e) {
+          console.warn('Encryption failed to initialize:', e);
+        }
+      } else {
+        console.warn('Crypto API not available (Insecure context?)');
+      }
 
       // Step 2: Register file metadata (no file upload, no key sent to server)
       const response = await axios.post(`${API_BASE_URL}/register`, {
@@ -142,7 +191,9 @@ export default function Home() {
       setToken(newToken);
 
       // Step 3: Embed key in URL fragment — browsers never send #fragment to the server
-      window.location.hash = `key=${encodeURIComponent(keyB64)}`;
+      if (keyB64) {
+        window.location.hash = `key=${encodeURIComponent(keyB64)}`;
+      }
 
       // Step 4: Open WebSocket connection
       const ws = new WebSocket(`${WS_BASE_URL}/relay?token=${newToken}`);
@@ -159,7 +210,7 @@ export default function Home() {
             setWsStatus('waiting');
           } else if (msg.type === 'SEND_FILE') {
             setWsStatus('transferring');
-            if (fileRef.current && aesKeyRef.current) {
+            if (fileRef.current) {
               sendFileViaWebSocket(ws, fileRef.current, aesKeyRef.current);
             }
           }
@@ -285,11 +336,8 @@ export default function Home() {
       }
 
       // ─── E2E Decryption ─────────────────────────────────────────────────
-      // Read AES key from URL fragment (#key=...) — server never sent or saw this.
-      // Each encrypted chunk is: [12-byte IV | 64KB ciphertext | 16-byte GCM tag]
-      // Total encrypted stride per original 64KB chunk = CHUNK_SIZE + 12 + 16 = CHUNK_SIZE + 28
       const ENCRYPTED_CHUNK_STRIDE = CHUNK_SIZE + 28;
-      const hash = window.location.hash; // e.g. "#key=base64..."
+      const hash = window.location.hash;
       const keyParam = hash.startsWith('#key=') ? hash.slice(5) : null;
 
       let finalBuffer: ArrayBuffer;
@@ -300,7 +348,6 @@ export default function Home() {
           const plaintextChunks: ArrayBuffer[] = [];
           let pos = 0;
 
-          // Split the contiguous arraybuffer into per-chunk [IV|ciphertext] slices and decrypt
           while (pos < encrypted.byteLength) {
             const stride = Math.min(ENCRYPTED_CHUNK_STRIDE, encrypted.byteLength - pos);
             const chunkData = encrypted.slice(pos, pos + stride);
@@ -309,7 +356,6 @@ export default function Home() {
             pos += stride;
           }
 
-          // Assemble plaintext into one contiguous ArrayBuffer
           const totalBytes = plaintextChunks.reduce((n, c) => n + c.byteLength, 0);
           const assembled = new Uint8Array(totalBytes);
           let byteOffset = 0;
@@ -318,15 +364,12 @@ export default function Home() {
             byteOffset += chunk.byteLength;
           }
           finalBuffer = assembled.buffer;
-
-          // Clear key from URL bar after successful decryption
           window.location.hash = '';
         } catch {
           alert('Decryption failed — the key in your URL may be wrong or the file was corrupted.');
           return;
         }
       } else {
-        // No key in fragment → S3 mode or share without encryption: use raw buffer directly
         finalBuffer = response.data as ArrayBuffer;
       }
       // ────────────────────────────────────────────────────────────────────
