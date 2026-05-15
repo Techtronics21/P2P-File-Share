@@ -19,6 +19,7 @@ COPY ui/ ./
 # Clear any stale env vars so the frontend uses relative paths
 ENV NEXT_PUBLIC_API_URL=""
 ENV NEXT_PUBLIC_WS_URL=""
+ENV DOCKER_BUILD="true"
 
 RUN npm run build
 
