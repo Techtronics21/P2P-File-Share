@@ -19,6 +19,9 @@ public class RelayServer extends WebSocketServer {
         super(new InetSocketAddress(port));
         this.fileSharer = fileSharer;
         setReuseAddr(true);
+        // Send ping frames every 10 seconds to keep connections alive
+        // through cloud proxies (Railway, Render, etc.)
+        setConnectionLostTimeout(20);
     }
 
     @Override
